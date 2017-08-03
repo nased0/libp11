@@ -3,7 +3,7 @@
  * Copyright (c) 2002 Juha Yrjölä
  * Copyright (c) 2002 Olaf Kirch
  * Copyright (c) 2003 Kevin Stefanik
- * Copyright (c) 2017 Michał Trojnara
+ * Copyright (c) 2017 Micha? Trojnara
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -80,12 +80,12 @@ void ctx_log(ENGINE_CTX *ctx, int level, const char *format, ...)
 }
 
 static void dump_hex(ENGINE_CTX *ctx, int level,
-		const unsigned char *val, const size_t len)
+		const char *val, const size_t len)
 {
 	size_t n;
 
 	for (n = 0; n < len; n++)
-		ctx_log(ctx, level, "%02x", val[n]);
+		ctx_log(ctx, level, "%02x", (const unsigned char)val[n]);
 }
 
 /******************************************************************************/
@@ -355,7 +355,7 @@ int ctx_finish(ENGINE_CTX *ctx)
 			 * ctx_destroy() because of a deadlock in PKCS#11
 			 * modules that internally use OpenSSL engines.
 			 * A memory leak is better than a deadlock... */
-			/* PKCS11_CTX_unload(ctx->pkcs11_ctx); */
+			PKCS11_CTX_unload(ctx->pkcs11_ctx);
 			PKCS11_CTX_free(ctx->pkcs11_ctx);
 			ctx->pkcs11_ctx = NULL;
 		}
@@ -370,7 +370,7 @@ int ctx_finish(ENGINE_CTX *ctx)
 /* prototype for OpenSSL ENGINE_load_cert */
 /* used by load_cert_ctrl via ENGINE_ctrl for now */
 
-static X509 *ctx_load_cert(ENGINE_CTX *ctx, const char *s_slot_cert_id,
+static PKCS11_CERT *ctx_load_pkcs11_cert(ENGINE_CTX *ctx, const char *s_slot_cert_id,
 		const int login)
 {
 	PKCS11_SLOT *slot;
@@ -553,6 +553,20 @@ static X509 *ctx_load_cert(ENGINE_CTX *ctx, const char *s_slot_cert_id,
 			selected_cert = certs; /* Use the first certificate */
 	}
 
+	if (cert_label != NULL)
+		OPENSSL_free(cert_label); 
+
+	return selected_cert;
+}
+
+static X509 *ctx_load_cert(ENGINE_CTX *ctx, const char *s_slot_cert_id,
+		const int login)
+{
+	PKCS11_CERT *selected_cert = NULL;
+	X509 *x509;
+
+	selected_cert = ctx_load_pkcs11_cert(ctx, s_slot_cert_id, login);
+
 	if (selected_cert != NULL) {
 		x509 = X509_dup(selected_cert->x509);
 	} else {
@@ -560,8 +574,6 @@ static X509 *ctx_load_cert(ENGINE_CTX *ctx, const char *s_slot_cert_id,
 			ctx_log(ctx, 0, "Certificate not found.\n");
 		x509 = NULL;
 	}
-	if (cert_label != NULL)
-		OPENSSL_free(cert_label);
 	return x509;
 }
 
@@ -599,7 +611,7 @@ static int ctx_ctrl_load_cert(ENGINE_CTX *ctx, void *p)
 /* Private and public key handling                                            */
 /******************************************************************************/
 
-static EVP_PKEY *ctx_load_key(ENGINE_CTX *ctx, const char *s_slot_key_id,
+static EVP_PKEY *ctx_load_key(ENGINE_CTX *ctx, const char *s_slot_key_id, 
 		UI_METHOD *ui_method, void *callback_data,
 		const int isPrivate, const int login)
 {
@@ -607,7 +619,7 @@ static EVP_PKEY *ctx_load_key(ENGINE_CTX *ctx, const char *s_slot_key_id,
 	PKCS11_SLOT *found_slot = NULL;
 	PKCS11_TOKEN *tok, *match_tok = NULL;
 	PKCS11_KEY *keys, *selected_key = NULL;
-	PKCS11_CERT *certs;
+	PKCS11_CERT *certs, *selected_cert = NULL;
 	EVP_PKEY *pk;
 	unsigned int cert_count, key_count, n, m;
 	unsigned char key_id[MAX_VALUE_LEN / 2];
@@ -671,6 +683,13 @@ static EVP_PKEY *ctx_load_key(ENGINE_CTX *ctx, const char *s_slot_key_id,
 		if (key_label != NULL)
 			ctx_log(ctx, 1, "label=%s", key_label);
 		ctx_log(ctx, 1, "\n");
+	} else {
+		selected_cert = ctx_load_pkcs11_cert(ctx, NULL, login);
+		if(selected_cert != NULL) {
+			selected_key = PKCS11_find_key(selected_cert);
+			if(selected_key != NULL)
+				goto key_found;
+		}
 	}
 
 	for (n = 0; n < ctx->slot_count; n++) {
@@ -830,7 +849,7 @@ static EVP_PKEY *ctx_load_key(ENGINE_CTX *ctx, const char *s_slot_key_id,
 	} else {
 		selected_key = keys; /* Use the first key */
 	}
-
+key_found:
 	if (selected_key != NULL) {
 		pk = isPrivate ?
 			PKCS11_get_private_key(selected_key) :
