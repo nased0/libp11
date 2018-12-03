@@ -3,7 +3,7 @@
  * Copyright (c) 2002 Juha Yrjölä
  * Copyright (c) 2002 Olaf Kirch
  * Copyright (c) 2003 Kevin Stefanik
- * Copyright (c) 2017 Michał Trojnara
+ * Copyright (c) 2017 Michal Trojnara
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -33,6 +33,8 @@
 /* The maximum length of an internally-allocated PIN */
 #define MAX_PIN_LENGTH   32
 #define MAX_VALUE_LEN	200
+#define BANNED_CERT_LABEL1 "Certyfikat CCK"
+#define BANNED_CERT_LABEL2 "CCK"
 
 struct st_engine_ctx {
 	/* Engine configuration */
@@ -80,12 +82,12 @@ void ctx_log(ENGINE_CTX *ctx, int level, const char *format, ...)
 }
 
 static void dump_hex(ENGINE_CTX *ctx, int level,
-		const unsigned char *val, const size_t len)
+		const char *val, const size_t len)
 {
 	size_t n;
 
 	for (n = 0; n < len; n++)
-		ctx_log(ctx, level, "%02x", val[n]);
+		ctx_log(ctx, level, "%02x", (const unsigned char)val[n]);
 }
 
 /******************************************************************************/
@@ -541,16 +543,20 @@ static PKCS11_CERT *ctx_load_pkcs11_cert(ENGINE_CTX *ctx, const char *s_slot_cer
 					memcmp(k->id, cert_id, cert_id_len) == 0)
 				selected_cert = k;
 		}
-	} else { 
+	} else { /* Use the first certificate with nonempty id */
 		for (n = 0; n < cert_count; n++) {
 			PKCS11_CERT *k = certs + n;
-			if(k->id && *(k->id)) {
-				selected_cert = k; /* Use the first certificate with nonempty id */
+			if(k->id && *(k->id) && 
+				(strcmp(k->label, BANNED_CERT_LABEL1) != 0) &&
+				(strncmp(k->label, BANNED_CERT_LABEL2, strlen(BANNED_CERT_LABEL2)) != 0)) {
+				selected_cert = k;
 				break;
 			}
 		}
-		if(!selected_cert)
+		if(!selected_cert && (strcmp(certs->label, BANNED_CERT_LABEL1) != 0) &&
+					   (strncmp(certs->label, BANNED_CERT_LABEL2, strlen(BANNED_CERT_LABEL2)) != 0)) {
 			selected_cert = certs; /* Use the first certificate */
+		}
 	}
 
 	if (cert_label != NULL)
